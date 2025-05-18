@@ -1,0 +1,230 @@
+import { resolve, join, dirname } from "node:path";
+import { parentPort, workerData } from "node:worker_threads";
+import { cwd } from "node:process";
+
+import {
+  readConfigFile,
+  parseJsonConfigFileContent,
+  createProgram,
+  createEmitAndSemanticDiagnosticsBuilderProgram,
+  createSolutionBuilderHost,
+  createSolutionBuilder,
+  getParsedCommandLineOfConfigFile,
+  getPreEmitDiagnostics,
+  sys,
+  formatDiagnostic,
+  getLineAndCharacterOfPosition,
+  flattenDiagnosticMessageText
+} from "typescript";
+import type {
+  CompilerOptions,
+  CompilerHost,
+  EmitAndSemanticDiagnosticsBuilderProgram,
+  Diagnostic,
+  ProjectReference,
+  BuildOptions,
+  ParseConfigFileHost
+} from "typescript";
+import { copy } from "fs-extra";
+
+import type { WorkerData } from "./types.js";
+
+// == Main =====================================================================
+const PROJECT_ROOT = cwd();
+const WORKER_DATA: WorkerData = workerData as WorkerData;
+
+const tsconfigPath = resolve(
+  WORKER_DATA.tsconfigPath ?? join(PROJECT_ROOT, "tsconfig.json")
+);
+const configFile = readConfigFile(tsconfigPath, sys.readFile);
+
+if (configFile.error) {
+  throw new Error(errFormatDiagnostic(configFile.error));
+}
+
+if (WORKER_DATA.include) {
+  configFile.config.include = stringToStringArray(WORKER_DATA.include);
+}
+if (WORKER_DATA.exclude) {
+  configFile.config.exclude = stringToStringArray(WORKER_DATA.exclude);
+}
+
+const parsedConfig = parseJsonConfigFileContent(
+  configFile.config,
+  sys,
+  dirname(tsconfigPath)
+);
+
+if (parsedConfig.errors.length > 0) {
+  parsedConfig.errors.forEach((error) => {
+    reportDiagnostic(error);
+  });
+  throw new Error("Failed to parse tsconfig.json");
+}
+
+const compilerOptions: CompilerOptions = {
+  incremental: true,
+  // assumeChangesOnlyAffectDirectDependencies: false,
+  declaration: true,
+  // declarationMap: false,
+  emitDeclarationOnly: true,
+  // sourceMap: false,
+  // inlineSourceMap: false,
+  // traceResolution: false,
+  ...parsedConfig.options,
+  ...(WORKER_DATA.compilerOptions ?? {})
+};
+
+const distDir =
+  WORKER_DATA.outDir ??
+  compilerOptions.declarationDir ??
+  compilerOptions.outDir ??
+  join(PROJECT_ROOT, "dist");
+const cacheDir = WORKER_DATA.cacheDir ?? join(PROJECT_ROOT, ".tsBuildCache");
+compilerOptions.declarationDir = cacheDir;
+
+const buildOptions: BuildOptions = {
+  dry: false,
+  force: false,
+  verbose: false,
+  stopBuildOnErrors: true,
+  ...(WORKER_DATA.buildOptions ?? {})
+};
+
+if (WORKER_DATA.mode === "compile") {
+  (async () => await runCompile())();
+} else {
+  (async () => await runBuild())();
+}
+
+// == Functions ================================================================
+// -- Compile ------------------------------------------------------------------
+async function runCompile() {
+  const program = createProgram({
+    rootNames: parsedConfig.fileNames,
+    options: compilerOptions
+  });
+
+  const emitResult = program.emit();
+  const allDiagnostics = getPreEmitDiagnostics(program).concat(
+    emitResult.diagnostics
+  );
+
+  allDiagnostics.forEach((diagnostic) => {
+    if (diagnostic.file && diagnostic.start !== undefined) {
+      const { line, character } = getLineAndCharacterOfPosition(
+        diagnostic.file,
+        diagnostic.start
+      );
+      const message = flattenDiagnosticMessageText(
+        diagnostic.messageText,
+        "\n"
+      );
+      console.error(
+        `${diagnostic.file.fileName} (${line + 1},${character + 1}): ${message}`
+      );
+    } else {
+      console.error(flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
+    }
+  });
+
+  const exitCode = emitResult.emitSkipped ? 1 : 0;
+  return await copyToDist(exitCode);
+}
+
+// -- Build --------------------------------------------------------------------
+async function runBuild() {
+  const host = createSolutionBuilderHost(
+    sys,
+    createBuilderProgram,
+    reportDiagnostic,
+    reportSolutionBuilderStatus,
+    reportErrorSummary
+  );
+
+  const parseConfigHost: ParseConfigFileHost = {
+    fileExists: sys.fileExists,
+    readFile: sys.readFile,
+    readDirectory: sys.readDirectory,
+    useCaseSensitiveFileNames: sys.useCaseSensitiveFileNames,
+    getCurrentDirectory: sys.getCurrentDirectory,
+    onUnRecoverableConfigFileDiagnostic: reportDiagnostic
+  };
+  host.getParsedCommandLine = (fileName) =>
+    getParsedCommandLineOfConfigFile(
+      fileName,
+      compilerOptions,
+      parseConfigHost
+    );
+
+  const builder = createSolutionBuilder(host, [tsconfigPath], buildOptions);
+  const exitCode = builder.build();
+  return await copyToDist(exitCode);
+}
+
+function createBuilderProgram(
+  rootNames?: readonly string[],
+  options?: CompilerOptions,
+  host?: CompilerHost,
+  oldProgram?: EmitAndSemanticDiagnosticsBuilderProgram,
+  configFileParsingDiagnostics?: readonly Diagnostic[],
+  projectReferences?: readonly ProjectReference[] | undefined
+) {
+  return createEmitAndSemanticDiagnosticsBuilderProgram(
+    rootNames,
+    { ...(options ?? {}), ...compilerOptions },
+    host,
+    oldProgram,
+    configFileParsingDiagnostics,
+    projectReferences
+  );
+}
+
+function reportDiagnostic(diagnostic: Diagnostic) {
+  console.error(errFormatDiagnostic(diagnostic));
+}
+
+function reportSolutionBuilderStatus(diagnostic: Diagnostic) {
+  console.info(errFormatDiagnostic(diagnostic));
+}
+
+function reportErrorSummary(errorCount: number) {
+  if (errorCount !== 0) {
+    console.error(`${errorCount} errors occurred.`);
+  }
+}
+
+// -- Copy ---------------------------------------------------------------------
+function copyToDist(exitCode: number) {
+  return new Promise<void>((resolve, reject) => {
+    if (exitCode === 0) {
+      parentPort?.postMessage("build-end");
+      parentPort?.once("message", () => {
+        copy(`${cacheDir}/`, `${distDir}/`)
+          .then(() => {
+            parentPort?.close();
+            resolve();
+          })
+          .catch((error) => {
+            console.error("failed:", error);
+            reject(error);
+          });
+      });
+    } else {
+      reject();
+    }
+  });
+}
+
+// -- Utils --------------------------------------------------------------------
+function stringToStringArray(value: string | string[]): string[] {
+  return typeof value === "string" ? [value] : value;
+}
+
+function errFormatDiagnostic(diagnostic: Diagnostic) {
+  return formatDiagnostic(diagnostic, {
+    getCanonicalFileName: (fileName) => fileName,
+    getCurrentDirectory: sys.getCurrentDirectory,
+    getNewLine: () => sys.newLine
+  });
+}

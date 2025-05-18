@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "baseUrl": "./",
+    "tsBuildInfoFile": "./.cache/typescript/tsbuildinfo-compile",
+    "outDir": "./compiled/",
+    "declarationDir": "./compiled/",
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": false,
+  },
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    ".cache",
+    "**/*.test.ts"
+  ],
+}

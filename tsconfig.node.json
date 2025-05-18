@@ -1,0 +1,32 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "emitDeclarationOnly": false,
+    "noEmit": true,
+    "allowJs": true,
+    "paths": {},
+    "tsBuildInfoFile": "./.cache/typescript/tsbuildinfo-node",
+    "outDir": "./.cache/typescript/tsbuild-node",
+    "types": [
+      "node"
+    ]
+  },
+  "references": [
+    {
+      "path": "./tsconfig.compile.json"
+    }
+  ],
+  "include": [
+    "compiled/**/*",
+    "src/**/*",
+    "vite.config.ts",
+  ],
+  "exclude": [
+    "node_modules",
+    "temp",
+    ".cache",
+    "**/*.test.ts"
+  ],
+}

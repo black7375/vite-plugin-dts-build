@@ -1,0 +1,58 @@
+{
+  "name": "vite-plugin-dts-build",
+  "description": "A Vite plugin that runs TypeScript build process in a separate worker thread for better performance and efficient incremental builds",
+  "keywords": [
+    "vite",
+    "plugin",
+    "dts",
+    "typescript",
+    "tsc",
+    "build",
+    "incremental",
+    "worker-thread",
+    "performance",
+    "declaration",
+    "types"
+  ],
+  "version": "0.1.0",
+  "type": "module",
+  "typings": "./dist/esm/index.d.ts",
+  "main": "./dist/cjs/index.cjs",
+  "module": "./dist/esm/index.js",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.cts",
+        "default": "./dist/cjs/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "README.md",
+    "dist/"
+  ],
+  "scripts": {
+    "build": "tsc --build tsconfig.compile.json && vite build"
+  },
+  "devDependencies": {
+    "@supercharge/promise-pool": "^3.2.0",
+    "@types/fs-extra": "^11",
+    "@types/node": "^22.15.18",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5",
+    "vite-plugin-externalize-deps": "^0.9.0",
+    "vite-tsconfig-paths": "^5.1.4"
+  },
+  "peerDependencies": {
+    "typescript": "*",
+    "vite": "*"
+  },
+  "dependencies": {
+    "fs-extra": "^11.3.0"
+  },
+  "packageManager": "yarn@4.9.1"
+}
