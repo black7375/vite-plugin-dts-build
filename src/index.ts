@@ -85,6 +85,8 @@ export function dts(options: PluginDtsBuildOptions = {}) {
   };
   return {
     name: "vite-plugin-dts-build",
+    enforce: "pre",
+    apply: "build",
     async buildStart() {
       // Only run once regardless of format
       if (runState.hasStartRun) {

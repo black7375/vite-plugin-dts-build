@@ -29,6 +29,13 @@ pnpm add vite-plugin-dts-build -D
 
 ## Usage
 
+> [!IMPORTANT]
+> This project works assuming you have set up [Project Reference](https://www.typescriptlang.org/docs/handbook/project-references.html) correctly.  
+> We recommend using automatically generated or maintained:
+> - Single Repo: [vite's scaffolding](https://vite.dev/guide/#scaffolding-your-first-vite-project)
+> - Mono Repo: [`@monorepo-utils/workspaces-to-typescript-project-references`](https://github.com/azu/monorepo-utils/tree/master/packages/%40monorepo-utils/workspaces-to-typescript-project-references) with `--includesRoot` and `--includesLocal` options
+
+
 ```typescript
 // vite.config.ts
 import { defineConfig } from 'vite';
@@ -137,6 +144,9 @@ export default defineConfig({
 
 ### Custom configuration
 
+> [!TIP]
+> If you want to see a library that supports both ESM and CommonJS at the same time, see [this project `vite.config.ts`](./vite.config.ts).
+
 ```typescript
 // vite.config.ts
 import { defineConfig } from 'vite';
@@ -158,6 +168,13 @@ export default defineConfig({
   ]
 });
 ```
+
+## For more performance
+
+If you want to further improve performance, consider the following:
+- [`assumeChangesOnlyAffectDirectDependencies`](https://www.typescriptlang.org/tsconfig/#assumeChangesOnlyAffectDirectDependencies): Affected files are not rechecked/rebuilt, and only changed files and directly imported files are rechecked/rebuilt, so it is faster but less accurate.
+- [`isolatedDeclarations`](https://www.typescriptlang.org/tsconfig/#isolatedDeclarations): It is useful when building or checking types in parallel, but requires [explicitly changing each type](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-5.html#solution-explicit-types) at the code level.
+- If you want to make it faster even by changing the code level, refer to [TypeScript Performance Wiki](https://github.com/microsoft/Typescript/wiki/Performance).
 
 ## How It Works
 
