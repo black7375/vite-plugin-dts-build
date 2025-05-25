@@ -22,11 +22,14 @@ const outCjsDir = resolve(packageRoot, "dist", "cjs");
 export default defineConfig(() => ({
   build: {
     lib: {
-      entry: entryFile,
+      entry: {
+        index: entryFile,
+        "worker": resolve(entryRoot, "worker.ts"),
+      },
       formats: ["es", "cjs"],
       fileName: (format, entryName) =>
         `${format === "es" ? "esm" : "cjs"}/${entryName}.${
-          format === "es" ? "mjs" : "cjs"
+          format === "es" ? "js" : "cjs"
         }`,
     },
     target: ["es2020"],

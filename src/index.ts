@@ -6,20 +6,23 @@ import { performance } from "node:perf_hooks";
 import type { WorkerData, PluginDtsBuildOptions } from "./types.js";
 
 let _dirname: string, _filename: string;
+let _workerName: string;
 // @ts-ignore Support for ESM and CommonJS
 if (typeof import.meta !== 'undefined') {
   // ESM
   // @ts-ignore Only available in ESM
   _filename = fileURLToPath(import.meta.url);
   _dirname = dirname(_filename);
+  _workerName = "worker.js";
 } else {
   // CommonJS
   _dirname = __dirname;
   _filename = __filename;
+  _workerName = "worker.cjs";
 }
 
 function createWorker(options: WorkerData) {
-  return new Worker(join(_dirname, "worker.js"), {
+  return new Worker(join(_dirname, _workerName), {
     workerData: options
   });
 }
@@ -85,8 +88,8 @@ export function dts(options: PluginDtsBuildOptions = {}) {
   };
   return {
     name: "vite-plugin-dts-build",
-    enforce: "pre",
-    apply: "build",
+    enforce: "pre" as const,
+    apply: "build" as const,
     async buildStart() {
       // Only run once regardless of format
       if (runState.hasStartRun) {
