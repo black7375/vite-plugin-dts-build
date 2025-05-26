@@ -1,4 +1,3 @@
-// main.js
 import { Worker } from "node:worker_threads";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -83,8 +82,7 @@ export function dts(options: PluginDtsBuildOptions = {}) {
 
   const runState = {
     hasStartRun: false,
-    canWriteRun: false,
-    completed: false
+    canWriteRun: false
   };
   return {
     name: "vite-plugin-dts-build",

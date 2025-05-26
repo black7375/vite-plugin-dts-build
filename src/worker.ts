@@ -2,20 +2,7 @@ import { resolve, join, dirname } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import { cwd } from "node:process";
 
-import {
-  readConfigFile,
-  parseJsonConfigFileContent,
-  createProgram,
-  createEmitAndSemanticDiagnosticsBuilderProgram,
-  createSolutionBuilderHost,
-  createSolutionBuilder,
-  getParsedCommandLineOfConfigFile,
-  getPreEmitDiagnostics,
-  sys,
-  formatDiagnostic,
-  getLineAndCharacterOfPosition,
-  flattenDiagnosticMessageText
-} from "typescript";
+import ts from "typescript";
 import type {
   CompilerOptions,
   CompilerHost,
@@ -28,6 +15,26 @@ import type {
 import { copy } from "fs-extra";
 
 import type { WorkerData } from "./types.js";
+
+/**
+ * Typescript is CommonJS package, pnp error
+ * SyntaxError: Named export 'createEmitAndSemanticDiagnosticsBuilderProgram' not found. The requested module 'typescript' is a CommonJS module, which may not support all module.exports as named exports.
+ * CommonJS modules can always be imported via the default export, for example using:
+ */
+const {
+  readConfigFile,
+  parseJsonConfigFileContent,
+  createProgram,
+  createEmitAndSemanticDiagnosticsBuilderProgram,
+  createSolutionBuilderHost,
+  createSolutionBuilder,
+  getParsedCommandLineOfConfigFile,
+  getPreEmitDiagnostics,
+  sys,
+  formatDiagnostic,
+  getLineAndCharacterOfPosition,
+  flattenDiagnosticMessageText,
+} = ts;
 
 // == Main =====================================================================
 const PROJECT_ROOT = cwd();

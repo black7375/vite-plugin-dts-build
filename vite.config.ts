@@ -42,7 +42,7 @@ export default defineConfig(() => ({
       include: ["src"],
       cacheDir: cacheEsmDir,
       outDir: outEsmDir,
-      tsconfigPath: resolve(packageRoot, "tsconfig.lib.json"),
+      tsconfigPath: resolve(packageRoot, "tsconfig.lib.json")
     }),
     dts({
       include: ["src"],
@@ -57,7 +57,7 @@ export default defineConfig(() => ({
           ".cache",
           "typescript",
           "tsbuildinfo-cjs"
-        ),
+        )
       },
       afterBuild: async () => {
         // Rename the CommonJS declaration file to .d.cts

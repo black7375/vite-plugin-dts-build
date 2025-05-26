@@ -18,13 +18,13 @@ A Vite plugin that runs TypeScript incremental build process in a separate worke
 
 ```bash
 # npm
-npm install vite-plugin-dts-build -D
+npm install -D vite-plugin-dts-build
 
 # yarn
-yarn add vite-plugin-dts-build -D
+yarn add -D vite-plugin-dts-build
 
 # pnpm
-pnpm add vite-plugin-dts-build -D
+pnpm add -D vite-plugin-dts-build
 ```
 
 ## Usage
