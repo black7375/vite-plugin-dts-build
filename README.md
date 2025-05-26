@@ -156,7 +156,8 @@ export default defineConfig({
   plugins: [
     dts({
       compilerOptions: {
-        noEmit: true
+        noEmit: true,
+        emitDeclarationOnly: false
       }
     })
   ]
