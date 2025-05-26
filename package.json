@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-dts-build",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "A Vite plugin that runs TypeScript build process in a separate worker thread for better performance and efficient incremental builds",
   "license": "MIT",
   "repository": {

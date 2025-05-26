@@ -2,7 +2,7 @@ import { Worker } from "node:worker_threads";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { performance } from "node:perf_hooks";
-import type { WorkerData, PluginDtsBuildOptions } from "./types.js";
+import type { WorkerData, PluginDtsBuildOptions, WorkerToMainMessage } from "./types.js";
 
 let _dirname: string, _filename: string;
 let _workerName: string;
@@ -27,11 +27,11 @@ function createWorker(options: WorkerData) {
 }
 
 function waitBuildInWorker(worker: Worker, startTime: number) {
-  return new Promise<void>((resolve, reject) => {
-    worker.once("message", () => {
+  return new Promise<WorkerToMainMessage>((resolve, reject) => {
+    worker.once("message", (message: WorkerToMainMessage) => {
       printMessage(`Declaration files built in ${measureTime(startTime)}ms.`);
       worker.removeAllListeners();
-      resolve();
+      resolve(message);
     });
 
     worker.once("error", (err) => {
@@ -99,8 +99,9 @@ export function dts(options: PluginDtsBuildOptions = {}) {
       printMessage("Starting TypeScript build...");
       workerInstance = createWorker(workerOptions);
       const result = await waitBuildInWorker(workerInstance, startTime);
-      runState.canWriteRun = true;
-      return result;
+      if (result === "build-end") {
+        runState.canWriteRun = true;
+      }
     },
     async writeBundle() {
       // Only run once regardless of format
@@ -111,9 +112,8 @@ export function dts(options: PluginDtsBuildOptions = {}) {
 
       printMessage("Starting Copy files...");
       workerInstance?.postMessage("copy-start");
-      const result = await waitCopyInWorker(workerInstance, afterBuild);
+      await waitCopyInWorker(workerInstance, afterBuild);
       workerInstance = undefined;
-      return result;
     },
     watchChange(
       _id: string,

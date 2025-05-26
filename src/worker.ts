@@ -14,7 +14,7 @@ import type {
 } from "typescript";
 import { copy } from "fs-extra";
 
-import type { WorkerData } from "./types.js";
+import type { WorkerData, WorkerToMainMessage } from "./types.js";
 
 /**
  * Typescript is CommonJS package, pnp error
@@ -97,6 +97,8 @@ const buildOptions: BuildOptions = {
   stopBuildOnErrors: true,
   ...(WORKER_DATA.buildOptions ?? {})
 };
+
+const checkerMode = compilerOptions?.noEmit === true || buildOptions?.dry === true;
 
 if (WORKER_DATA.mode === "compile") {
   (async () => await runCompile())();
@@ -205,18 +207,24 @@ function reportErrorSummary(errorCount: number) {
 function copyToDist(exitCode: number) {
   return new Promise<void>((resolve, reject) => {
     if (exitCode === 0) {
-      parentPort?.postMessage("build-end");
-      parentPort?.once("message", () => {
-        copy(`${cacheDir}/`, `${distDir}/`)
-          .then(() => {
-            parentPort?.close();
-            resolve();
-          })
-          .catch((error) => {
-            console.error("failed:", error);
-            reject(error);
-          });
-      });
+      if (checkerMode) {
+        parentPort?.postMessage("check-end" satisfies WorkerToMainMessage);
+        resolve();
+      }
+      else {
+        parentPort?.postMessage("build-end" satisfies WorkerToMainMessage);
+        parentPort?.once("message", () => {
+          copy(`${cacheDir}/`, `${distDir}/`)
+            .then(() => {
+              parentPort?.close();
+              resolve();
+            })
+            .catch((error) => {
+              console.error("failed:", error);
+              reject(error);
+            });
+        });
+      }
     } else {
       reject();
     }

@@ -142,6 +142,27 @@ export default defineConfig({
 });
 ```
 
+### Checker mode
+
+If you want to check without creating a type, use noEmit options.  
+Assuming it's a service, not a library.
+
+```typescript
+// vite.config.ts
+import { defineConfig } from 'vite';
+import { dts } from 'vite-plugin-dts-build';
+
+export default defineConfig({
+  plugins: [
+    dts({
+      compilerOptions: {
+        noEmit: true
+      }
+    })
+  ]
+});
+```
+
 ### Custom configuration
 
 > [!TIP]

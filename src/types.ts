@@ -80,7 +80,7 @@ export interface PluginDtsBuildOptions extends WorkerData {
 /**
  * Message types sent from worker to main thread
  */
-export type WorkerToMainMessage = "build-end";
+export type WorkerToMainMessage = "build-end" | "check-end";
 
 /**
  * Message types sent from main thread to worker
