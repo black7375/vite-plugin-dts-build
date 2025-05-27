@@ -94,7 +94,7 @@ const buildOptions: BuildOptions = {
   dry: false,
   force: false,
   verbose: false,
-  stopBuildOnErrors: true,
+  stopBuildOnErrors: false,
   ...(WORKER_DATA.buildOptions ?? {})
 };
 
