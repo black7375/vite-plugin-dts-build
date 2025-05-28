@@ -128,8 +128,10 @@ function getErrorMessage(error: unknown): string {
 async function processCtsFile(fullPath: string) {
   // Change import paths from .js to .cjs
   const content = await readFile(fullPath, "utf8");
-  const importRegex = /from ['"](.+)\.js['"];?$/gm;
-  const modifiedContent = content.replace(importRegex, "from '$1.cjs'");
+  const importRegex = /import ['"](.+)\.js['"];?$/gm;
+  const importFromRegex = /from ['"](.+)\.js['"];?$/gm;
+  const modifiedContent = content.replace(importRegex, "import '$1.cjs';")
+                                 .replace(importFromRegex, "from '$1.cjs';");
 
   // Change file extension from .d.ts to .d.cts
   const newPath = fullPath.replace(".d.ts", ".d.cts");
