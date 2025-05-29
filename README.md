@@ -164,6 +164,43 @@ export default defineConfig({
 });
 ```
 
+### Dual Module Support
+
+For libraries that need to support both ESM and CommonJS, use the specialized functions `dtsForEsm` and `dtsForCjs`. \
+These functions simplify complex module-specific configurations:
+
+```typescript
+// vite.config.ts
+import { defineConfig } from 'vite';
+import { dtsForEsm, dtsForCjs } from 'vite-plugin-dts-build';
+
+export default defineConfig({
+  build: {
+    lib: {
+      entry: './src/index.ts',
+      formats: ['es', 'cjs']
+    }
+  },
+  plugins: [
+    dtsForEsm({
+      include: ['src'],
+      tsconfigPath: './tsconfig.lib.json'
+    }),
+    dtsForCjs({
+      include: ['src'], 
+      tsconfigPath: './tsconfig.lib.json'
+    })
+  ]
+});
+```
+
+**How it works:**
+1. Each function generates declaration files with module-specific TypeScript compiler options
+2. Automatically detects the project's module type from `package.json`
+3. Renames declaration files and updates import paths based on the target module format
+4. Handles file extensions properly (`.d.mts` for ESM, `.d.cts` for CommonJS)
+5. Processes import statements to use correct file extensions (`.mjs` for ESM, `.cjs` for CommonJS)
+
 ### Custom configuration
 
 > [!TIP]
