@@ -147,7 +147,7 @@ export function dts(options: PluginDtsBuildOptions = {}) {
 // == Specialized DTS for Modules ==============================================
 export function dtsForEsm(options: PluginDtsBuildOptions = {}) {
   const { 
-    cacheDir = resolve(PackageJson.projectRootPath, ".cache", "typescript", "esm"),
+    cacheDir = resolve(PackageJson.projectRootPath, ".cache", "typescript-esm"),
     outDir = join(PackageJson.projectRootPath, "dist", "esm"),
     afterBuild,
     ...restOptions
@@ -176,7 +176,7 @@ export function dtsForEsm(options: PluginDtsBuildOptions = {}) {
 
 export function dtsForCjs(options: PluginDtsBuildOptions = {}) {
   const { 
-    cacheDir = resolve(PackageJson.projectRootPath, ".cache", "typescript", "cjs"),
+    cacheDir = resolve(PackageJson.projectRootPath, ".cache", "typescript-cjs"),
     outDir = join(PackageJson.projectRootPath, "dist", "cjs"),
     afterBuild,
     ...restOptions

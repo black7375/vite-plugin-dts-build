@@ -1,4 +1,4 @@
-import { resolve, join, dirname } from "node:path";
+import { resolve, join, dirname, relative, sep } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import { cwd } from "node:process";
 
@@ -89,6 +89,11 @@ const distDir =
   join(PROJECT_ROOT, "dist");
 const cacheDir = WORKER_DATA.cacheDir ?? join(PROJECT_ROOT, ".tsBuildCache");
 compilerOptions.declarationDir = cacheDir;
+
+// Compare relative depth between distDir and cacheDir with respect to each root source file
+if (shouldWarnSourceMapDepth()) {
+  warnIfSourceMapDepthMismatch();
+}
 
 const buildOptions: BuildOptions = {
   dry: false,
@@ -231,6 +236,41 @@ function copyToDist(exitCode: number) {
   });
 }
 
+// -- Source Map Depth Warning -------------------------------------------------
+function shouldWarnSourceMapDepth(): boolean {
+  const sourceMapEnabled = Boolean(
+    compilerOptions.sourceMap ||
+    compilerOptions.inlineSourceMap ||
+    compilerOptions.declarationMap
+  );
+  return sourceMapEnabled;
+}
+
+function warnIfSourceMapDepthMismatch() {
+  const roots = parsedConfig.fileNames;
+  const entry = roots[0];
+  if (entry == null) return;
+  const depthFromJs = computeRelativeDepth(entry, distDir);
+  const depthFromTs = computeRelativeDepth(entry, cacheDir);
+  if (depthFromJs !== depthFromTs) {
+    printWarnMessage(
+      `SourceMap relative path depth mismatch: distDir -> entry depth(${depthFromJs}) !== cacheDir -> entry depth(${depthFromTs}).\n` +
+      `This may cause broken relative source paths inside *.map files after copying. Consider aligning directory nesting.\n` +
+      `  distDir: ${relative(entry, distDir)}\n` +
+      `  cacheDir: ${relative(entry, cacheDir)}`
+    );
+  }
+}
+
+function computeRelativeDepth(fromFile: string, toDir: string): number {
+  const relPath = relative(fromFile, toDir); // Always returns a string
+  if (relPath === "") return 0;
+  const segments = relPath.split(sep);
+  // Exclude the last segment (file name) and filter out empty/current dir markers
+  const dirSegments = segments.slice(0, -1).filter(seg => seg !== "" && seg !== ".");
+  return dirSegments.length;
+}
+
 // -- Utils --------------------------------------------------------------------
 function stringToStringArray(value: string | string[]): string[] {
   return typeof value === "string" ? [value] : value;
@@ -242,4 +282,13 @@ function errFormatDiagnostic(diagnostic: Diagnostic) {
     getCurrentDirectory: sys.getCurrentDirectory,
     getNewLine: () => sys.newLine
   });
+}
+
+function printWarnMessage(message: string) {
+  // https://gist.github.com/abritinthebay/d80eb99b2726c83feb0d97eab95206c4
+  const cyan = "\x1b[36m";
+  const yellow = "\x1b[33m"
+  const reset = "\x1b[0m";
+
+  console.warn(`${cyan}[vite-tsc-build] ${yellow}${message}${reset}`);
 }
