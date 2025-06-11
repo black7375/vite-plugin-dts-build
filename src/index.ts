@@ -1,6 +1,6 @@
 import { Worker } from "node:worker_threads";
 import { readdir, readFile, writeFile, unlink } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cwd } from "node:process";
 import { performance } from "node:perf_hooks";
@@ -300,17 +300,45 @@ function getErrorMessage(error: unknown): string {
 
 const IMPORT_REGEX = /import ['"](.+)\.js['"];?$/gm;
 const IMPORT_FROM_REGEX = /from ['"](.+)\.js['"];?$/gm;
+// Source map comment patterns (line and block styles)
+const SOURCE_MAP_LINE_REGEX = /(\/\/\# sourceMappingURL=)([^\n]+?)\.d\.ts\.map/;
+const SOURCE_MAP_BLOCK_REGEX = /(\/\*# sourceMappingURL=)([^*]+?)\.d\.ts\.map(\s*\*\/)?/;
 async function processDtsFile(fullPath: string, type: ModuleKindType) {
   const jsExt = type === "esm" ? "mjs" : "cjs";
   const tsExt = type === "esm" ? "mts" : "cts";
 
   // Change import paths from .js to .mjs | .cjs
   const content = await readFile(fullPath, "utf8");
-  const modifiedContent = content.replace(IMPORT_REGEX, `import '$1.${jsExt}';`)
-                                 .replace(IMPORT_FROM_REGEX, `from '$1.${jsExt}';`);
+  const modifiedContent = content
+    .replace(IMPORT_REGEX, `import '$1.${jsExt}';`)
+    .replace(IMPORT_FROM_REGEX, `from '$1.${jsExt}';`);
+
+  // Update sourceMappingURL (//# or /*#) to new .d.mts/.d.cts.map
+  const sourceMapUpdated = modifiedContent
+    .replace(SOURCE_MAP_LINE_REGEX, `$1$2.d.${tsExt}.map`)
+    .replace(SOURCE_MAP_BLOCK_REGEX, `$1$2.d.${tsExt}.map$3`);
 
   // Change file extension from .d.ts to .d.mts | .d.cts
   const newPath = fullPath.replace(".d.ts", `.d.${tsExt}`);
-  await writeFile(newPath, modifiedContent, "utf8");
+  await writeFile(newPath, sourceMapUpdated, "utf8");
+
+  // Source map handling (index.d.ts.map -> index.d.mts.map | index.d.cts.map)
+  const oldMapPath = `${fullPath}.map`;
+  const newMapPath = `${newPath}.map`;
+  try {
+    const mapRaw = await readFile(oldMapPath, "utf8");
+    try {
+      const mapJson = JSON.parse(mapRaw) as { file?: string; [k: string]: unknown };
+      // Update the "file" property to reflect new declaration filename
+      mapJson.file = basename(newPath);
+      await writeFile(newMapPath, JSON.stringify(mapJson), "utf8");
+      await unlink(oldMapPath).catch(() => {});
+    } catch (e) {
+      console.warn(`Failed to update source map ${oldMapPath}: ${getErrorMessage(e)}`);
+    }
+  } catch {
+    // No map file; ignore
+  }
+
   await unlink(fullPath);
 }
