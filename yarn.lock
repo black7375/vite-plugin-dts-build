@@ -5,6 +5,24 @@ __metadata:
   version: 8
   cacheKey: 10
 
+"@black7375/vite-plugin-dts-build@workspace:.":
+  version: 0.0.0-use.local
+  resolution: "@black7375/vite-plugin-dts-build@workspace:."
+  dependencies:
+    "@supercharge/promise-pool": "npm:^3.2.0"
+    "@types/fs-extra": "npm:^11"
+    "@types/node": "npm:^22.15.18"
+    fs-extra: "npm:^11.3.0"
+    typescript: "npm:^5.8.3"
+    vite: "npm:^6.3.5"
+    vite-plugin-externalize-deps: "npm:^0.9.0"
+    vite-tsconfig-paths: "npm:^5.1.4"
+  peerDependencies:
+    typescript: "*"
+    vite: "*"
+  languageName: unknown
+  linkType: soft
+
 "@esbuild/aix-ppc64@npm:0.25.4":
   version: 0.25.4
   resolution: "@esbuild/aix-ppc64@npm:0.25.4"
@@ -1423,24 +1441,6 @@ __metadata:
   checksum: 10/ecd8469fe0db28e7de9e5289d32bd1b6ba8f7183db34f3bfc4ca53c49891c2d6aa05f3fb3936a81285a905cc509fb641a0c3fc131ec786167eff41236ae32e60
   languageName: node
   linkType: hard
-
-"vite-plugin-dts-build@workspace:.":
-  version: 0.0.0-use.local
-  resolution: "vite-plugin-dts-build@workspace:."
-  dependencies:
-    "@supercharge/promise-pool": "npm:^3.2.0"
-    "@types/fs-extra": "npm:^11"
-    "@types/node": "npm:^22.15.18"
-    fs-extra: "npm:^11.3.0"
-    typescript: "npm:^5.8.3"
-    vite: "npm:^6.3.5"
-    vite-plugin-externalize-deps: "npm:^0.9.0"
-    vite-tsconfig-paths: "npm:^5.1.4"
-  peerDependencies:
-    typescript: "*"
-    vite: "*"
-  languageName: unknown
-  linkType: soft
 
 "vite-plugin-externalize-deps@npm:^0.9.0":
   version: 0.9.0
