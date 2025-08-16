@@ -46,7 +46,8 @@
     "dist/"
   ],
   "scripts": {
-    "build": "tsc --build tsconfig.compile.json && vite build"
+    "build": "tsc --build tsconfig.compile.json && vite build",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@types/fs-extra": "^11",
@@ -54,7 +55,8 @@
     "typescript": "^5.8.3",
     "vite": "^6.3.5",
     "vite-plugin-externalize-deps": "^0.9.0",
-    "vite-tsconfig-paths": "^5.1.4"
+    "vite-tsconfig-paths": "^5.1.4",
+    "vitest": "^3.2.4"
   },
   "peerDependencies": {
     "typescript": "*",

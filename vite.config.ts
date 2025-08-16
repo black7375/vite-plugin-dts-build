@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { cwd } from "node:process";
 
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vitest/config";
 
 import { externalizeDeps } from "vite-plugin-externalize-deps";
 import tsconfigPaths from "vite-tsconfig-paths";
@@ -12,7 +12,19 @@ const packageRoot = cwd();
 const entryRoot = resolve(packageRoot, "src");
 const entryFile = resolve(entryRoot, "index.ts");
 
-export default defineConfig(() => ({
+export default defineConfig((env) => ({
+  ...(env.mode === "test"
+    ? {
+        test: {
+          includeSource: ["src/**/*.ts", "src/**/*.tsx"],
+          globals: true,
+        }
+      }
+    : {
+        define: {
+          "import.meta.vitest": "undefined",
+        }
+      }),
   build: {
     lib: {
       entry: {
@@ -29,11 +41,11 @@ export default defineConfig(() => ({
     minify: false
   },
   plugins: [
-    tsconfigPaths(),
-    externalizeDeps(),
+    tsconfigPaths() as Plugin,
+    externalizeDeps() as Plugin,
     dtsForEsm({
       include: ["src"],
-      tsconfigPath: resolve(packageRoot, "tsconfig.lib.json")
+      tsconfigPath: resolve(packageRoot, "tsconfig.lib.json"),
     }),
     dtsForCjs({
       include: ["src"],
