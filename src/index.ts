@@ -1,6 +1,6 @@
 import { Worker } from "node:worker_threads";
-import { readdir, readFile, writeFile, unlink } from "node:fs/promises";
-import { dirname, join, resolve, basename } from "node:path";
+import { readdir, readFile, mkdir, writeFile, unlink } from "node:fs/promises";
+import { dirname, join, resolve, basename, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cwd } from "node:process";
 import { performance } from "node:perf_hooks";
@@ -145,8 +145,13 @@ export function dts(options: PluginDtsBuildOptions = {}) {
 }
 
 // == Specialized DTS for Modules ==============================================
-export function dtsForEsm(options: PluginDtsBuildOptions = {}) {
+export interface PluginDtsDualModeBuildOptions extends PluginDtsBuildOptions {
+  packageRedirect?: boolean;
+}
+
+export function dtsForEsm(options: PluginDtsDualModeBuildOptions = {}) {
   const { 
+    packageRedirect = false,
     cacheDir = resolve(PackageJson.projectRootPath, ".cache", "typescript-esm"),
     outDir = join(PackageJson.projectRootPath, "dist", "esm"),
     afterBuild,
@@ -167,6 +172,10 @@ export function dtsForEsm(options: PluginDtsBuildOptions = {}) {
         // Rename the ESM declaration file to .d.mts
         await renameDeclarationFiles(outDir, "esm");
       }
+      if (packageRedirect) {
+        // Generate package.json redirects for Node.js 10 compatibility
+        await generatePackageJsonRedirects("import");
+      }
       if (afterBuild) {
         await Promise.resolve(afterBuild());
       }
@@ -174,8 +183,9 @@ export function dtsForEsm(options: PluginDtsBuildOptions = {}) {
   });
 }
 
-export function dtsForCjs(options: PluginDtsBuildOptions = {}) {
+export function dtsForCjs(options: PluginDtsDualModeBuildOptions = {}) {
   const { 
+    packageRedirect = true,
     cacheDir = resolve(PackageJson.projectRootPath, ".cache", "typescript-cjs"),
     outDir = join(PackageJson.projectRootPath, "dist", "cjs"),
     afterBuild,
@@ -195,6 +205,10 @@ export function dtsForCjs(options: PluginDtsBuildOptions = {}) {
         // Rename the CommonJS declaration file to .d.cts
         await renameDeclarationFiles(outDir, "cjs");
       }
+      if (packageRedirect) {
+        // Generate package.json redirects for Node.js 10 compatibility
+        await generatePackageJsonRedirects("require");
+      }
       if (afterBuild) {
         await Promise.resolve(afterBuild());
       }
@@ -205,6 +219,16 @@ export function dtsForCjs(options: PluginDtsBuildOptions = {}) {
 type ModuleKindType = "cjs" | "esm";
 interface PackageJsonType {
   type?: "commonjs" | "module";
+  exports?: ExportsField;
+  [k: string]: unknown;
+}
+
+type ExportsField = string | string[] | ExportsMap | null | undefined;
+type ExportsMap = Record<string, ExportTarget>;
+type ExportTarget = string | string[] | Conditions;
+interface Conditions {
+  types?: string;
+  default?: unknown;
   [k: string]: unknown;
 }
 
@@ -341,4 +365,295 @@ async function processDtsFile(fullPath: string, type: ModuleKindType) {
   }
 
   await unlink(fullPath);
+}
+
+//-- Node10 Support -----------------------------------------------------------
+type StubPrefer = "require" | "import";
+
+interface StubJson {
+  private: true;
+  main: string;
+  types?: string;
+}
+
+interface StubTaskResult {
+  stubDir: string;
+  stubJsonPath: string;
+  stub: StubJson | null;
+}
+
+async function generatePackageJsonRedirects(prefer: StubPrefer = "require") {
+  const rootDir = resolve(PackageJson.projectRootPath);
+  const pkg = await PackageJson.getData(rootDir);
+
+  if (pkg.exports != null) {
+    const tasks = computeRedirectStubs({
+      pkg,
+      rootDir,
+      prefer,
+    });
+
+    await writeRedirectStubs(tasks);
+  }
+}
+
+type BranchOrder = "import" | "default" | "node" | "require" | "browser";
+function computeRedirectStubs({
+  pkg,
+  rootDir,
+  prefer = "require",
+}: {
+  pkg: PackageJsonType;
+  rootDir: string;
+  prefer?: StubPrefer;
+}): StubTaskResult[] {
+  const exp = normalizeExports(pkg.exports);
+  if (exp == null) {
+    return [];
+  }
+
+  const rootTypes = typeof pkg.types === "string" ? pkg.types : undefined;
+  const branchOrder =
+    prefer === "import"
+      ? ["import", "node", "default", "require", "browser"] satisfies BranchOrder[]
+      : ["require", "node", "default", "import", "browser"] satisfies BranchOrder[];
+
+  const results: StubTaskResult[] = [];
+
+  for (const [key, entry] of Object.entries(exp)) {
+    if (!isStubAbleKey(key)) continue;
+
+    const { main, types } = selectTargets(entry, {
+      branchOrder,
+      rootTypes,
+    });
+
+    const subDirRel = key.replace(/^\.\//, "");
+    const stubDir = join(rootDir, subDirRel);
+    const stubJsonPath = join(stubDir, "package.json");
+
+    if (!main) {
+      results.push({
+        stubDir,
+        stubJsonPath,
+        stub: null,
+      });
+      continue;
+    }
+
+    const mainAbs = resolve(rootDir, main);
+    const mainRel = toPosixRelative(stubDir, mainAbs);
+
+    const stub: StubJson = { private: true, main: mainRel };
+
+    if (types) {
+      const typesAbs = resolve(rootDir, types);
+      stub.types = toPosixRelative(stubDir, typesAbs);
+    }
+
+    results.push({
+      stubDir,
+      stubJsonPath,
+      stub,
+    });
+  }
+
+  return results;
+}
+
+async function writeRedirectStubs(
+  tasks: StubTaskResult[],
+): Promise<void> {
+
+  for (const task of tasks) {
+    if (!task.stub || !task.stubDir || !task.stubJsonPath) continue;
+
+    await mkdir(task.stubDir, { recursive: true });
+
+    const json = JSON.stringify(task.stub, null, 2) + "\n";
+    await writeFile(task.stubJsonPath, json, "utf8");
+  }
+}
+
+function normalizeExports(exportsField: ExportsField): ExportsMap | null {
+  if (!exportsField) return null;
+
+  if (typeof exportsField === "string" || Array.isArray(exportsField)) {
+    return { ".": exportsField };
+  }
+
+  if (isPlainObject(exportsField)) {
+    return exportsField as ExportsMap;
+  }
+
+  return null;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isStubAbleKey(key: string): key is string {
+  // filter subpath keys only
+  if (!key.startsWith("./")) return false;
+  if (key === "." || key === "./") return false;
+  if (key === "./package.json") return false;
+  if (key.includes("*")) return false; // Skip wildcard stubs
+  return true;
+}
+
+/**
+ * Return remaining object keys after excluding branchOrder + reserved keys,
+ * sorted alphabetically for deterministic traversal.
+ */
+function getRemainingOrderedKeys(obj: Record<string, unknown>, branchOrder: readonly string[]): string[] {
+  const exclude = new Set([...branchOrder, "default", "types"]);
+  return Object.keys(obj)
+    .filter(k => !exclude.has(k))
+    .sort();
+}
+
+/**
+ * Pick both runtime(main) and types targets from an exports entry.
+ */
+function selectTargets(
+  entry: ExportTarget,
+  {
+    branchOrder,
+    rootTypes,
+  }: { branchOrder: BranchOrder[]; rootTypes?: string }
+): { main?: string; types?: string } {
+  const mainPick = pickMain(entry, branchOrder, undefined);
+  const chosenBranch = mainPick?.branch;
+  const typesPick = pickTypes(entry, chosenBranch, branchOrder) ?? rootTypes;
+  return { main: mainPick?.path, types: typesPick };
+}
+
+/**
+ * Select main export path (runtime entry) with branch preference order.
+ * Ordering strategy:
+ * 1. branchOrder conditions depth-first
+ * 2. top-level default if string
+ * 3. remaining keys (alphabetically) depth-first
+ */
+function pickMain(
+  exportTarget: ExportTarget,
+  branchOrder: BranchOrder[],
+  inheritedBranch?: string
+): { path: string; branch?: string } | undefined {
+  if (typeof exportTarget === "string") return { path: exportTarget, branch: inheritedBranch };
+
+  if (Array.isArray(exportTarget)) {
+    for (const candidate of exportTarget) {
+      const result = pickMain(candidate, branchOrder, inheritedBranch);
+      if (result?.path != null) return result;
+    }
+    return undefined;
+  }
+
+  if (isPlainObject(exportTarget)) {
+    // 1) condition branches in priority order
+    for (const condition of branchOrder) {
+      if (condition in exportTarget) {
+        const conditionalValue = exportTarget[condition] as Conditions;
+        const result = pickMain(conditionalValue, branchOrder, condition);
+        if (result?.path != null) return result;
+      }
+    }
+
+    // 2) top-level default (string)
+    const explicitDefault = exportTarget.default;
+    if (typeof explicitDefault === "string") {
+      return { path: explicitDefault, branch: inheritedBranch };
+    }
+
+    // 3) remaining keys in deterministic order
+    for (const propKey of getRemainingOrderedKeys(exportTarget, branchOrder)) {
+      const propValue = exportTarget[propKey];
+      if (typeof propValue === "string") return { path: propValue, branch: propKey };
+      const result = pickMain(propValue as ExportTarget, branchOrder, propKey);
+      if (result?.path) return result;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Choose types declaration path.
+ * Priority:
+ * 1. types in chosenBranch
+ * 2. top-level types
+ * 3. types in other branchOrder branches
+ * 4. deep search: remaining keys (alphabetical) then nested branchOrder recursively
+ *    to mirror pickMain deterministic ordering.
+ */
+function pickTypes(
+  exportTarget: ExportTarget,
+  chosenBranch: string | undefined,
+  branchOrder: BranchOrder[]
+): string | undefined {
+  if (typeof exportTarget === "string") return undefined;
+
+  if (Array.isArray(exportTarget)) {
+    for (const candidate of exportTarget) {
+      const found = pickTypes(candidate, chosenBranch, branchOrder);
+      if (found) return found;
+    }
+    return undefined;
+  }
+
+  if (isPlainObject(exportTarget)) {
+    // 1) types inside chosen branch
+    if (chosenBranch && exportTarget[chosenBranch]) {
+      const chosenBranchValueRaw = exportTarget[chosenBranch];
+      if (Array.isArray(chosenBranchValueRaw)) {
+        for (const element of chosenBranchValueRaw) {
+          if (isPlainObject(element) && typeof (element as any).types === "string") {
+            return (element as any).types as string;
+          }
+        }
+      } else if (isPlainObject(chosenBranchValueRaw)) {
+        const chosenBranchValue = chosenBranchValueRaw as Record<string, unknown>;
+        if (typeof chosenBranchValue.types === "string") return chosenBranchValue.types;
+      }
+    }
+
+    // 2) top-level types
+    if (typeof exportTarget.types === "string") return exportTarget.types;
+
+    // 3) other branches in priority order
+    for (const condition of branchOrder) {
+      if (condition !== chosenBranch && exportTarget[condition] && isPlainObject(exportTarget[condition])) {
+        const conditionValue = exportTarget[condition] as Record<string, unknown>;
+        const typesPath = conditionValue.types;
+        if (typeof typesPath === "string") return typesPath;
+      }
+    }
+
+    // 4a) remaining keys (alphabetical)
+    for (const key of getRemainingOrderedKeys(exportTarget, branchOrder)) {
+      const nestedValue = exportTarget[key];
+      const found = pickTypes(nestedValue as ExportTarget, chosenBranch, branchOrder);
+      if (found) return found;
+    }
+    // 4b) dive into branchOrder keys recursively
+    for (const condition of branchOrder) {
+      if (exportTarget[condition] && isPlainObject(exportTarget[condition])) {
+        const nestedValue = exportTarget[condition] as ExportTarget;
+        const found = pickTypes(nestedValue, chosenBranch, branchOrder);
+        if (found) return found;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+/** Stub directory based relative path (POSIX slash) */
+function toPosixRelative(fromDir: string, toAbs: string): string {
+  let rel = relative(fromDir, toAbs);
+  rel = rel.split(sep).join("/");
+  if (!rel.startsWith(".") && !rel.startsWith("/")) rel = "./" + rel;
+  return rel;
 }
