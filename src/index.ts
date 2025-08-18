@@ -657,3 +657,265 @@ function toPosixRelative(fromDir: string, toAbs: string): string {
   if (!rel.startsWith(".") && !rel.startsWith("/")) rel = "./" + rel;
   return rel;
 }
+
+// == Tests ====================================================================
+// Ignore errors when compiling to CommonJS.
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore error TS1343: The 'import.meta' meta-property is only allowed when the '--module' option is 'es2020', 'es2022', 'esnext', 'system', 'node16', or 'nodenext'.
+if (import.meta.vitest) {
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore error TS1343: The 'import.meta' meta-property is only allowed when the '--module' option is 'es2020', 'es2022', 'esnext', 'system', 'node16', or 'nodenext'.
+  const { describe, it, assert, expect } = import.meta.vitest;
+
+  // Helper to simplify creation of test package structures
+  function testStubs(pkg: any, prefer: "import" | "require" = "require") {
+    return computeRedirectStubs({ pkg, rootDir: "/proj", prefer });
+  }
+
+  describe("computeRedirectStubs", () => {
+    describe("empty and invalid exports", () => {
+      it.each([
+        [{}, []],
+        [{ exports: null }, []],
+        [{ exports: undefined }, []],
+        [{ exports: "./dist/index.js" }, []], // string exports (root only)
+        [{ exports: ["./dist/index.js", "./dist/index.mjs"] }, []] // array at root
+      ])("returns empty for %o", (pkg: PackageJsonType, expected: StubTaskResult[]) => {
+        expect(testStubs(pkg)).toEqual(expected);
+      });
+    });
+
+    describe("filtering export keys", () => {
+      it("skips root, wildcard, and package.json entries", () => {
+        const pkg = {
+          exports: {
+            ".": "./dist/index.js",
+            "./*": "./wildcard.js",
+            "./package.json": "./package.json",
+            "./valid": "./dist/valid.js",
+            "./sub": "./dist/sub.js"
+          }
+        };
+        const res = testStubs(pkg);
+        expect(res.map((r) => r.stubDir).sort()).toEqual([
+          "/proj/sub",
+          "/proj/valid"
+        ]);
+      });
+    });
+
+    describe("module preference resolution", () => {
+      const dualExports = {
+        exports: {
+          "./sub": {
+            import: "./esm/sub.js",
+            require: "./cjs/sub.cjs"
+          }
+        }
+      };
+
+      it("prefers import when prefer=import", () => {
+        const res = testStubs(dualExports, "import");
+        expect(res[0].stub?.main).toBe("../esm/sub.js");
+      });
+
+      it("prefers require when prefer=require", () => {
+        const res = testStubs(dualExports, "require");
+        expect(res[0].stub?.main).toBe("../cjs/sub.cjs");
+      });
+
+      it("uses fallback when preferred branch is missing", () => {
+        const pkg = {
+          exports: {
+            "./sub": { require: "./cjs/sub.cjs" } // no import field
+          }
+        };
+        const res = testStubs(pkg, "import");
+        expect(res[0].stub?.main).toBe("../cjs/sub.cjs");
+      });
+
+      it("prioritizes node condition correctly", () => {
+        const pkg = {
+          exports: {
+            "./sub": {
+              node: "./node/sub.js",
+              browser: "./browser/sub.js"
+            }
+          }
+        };
+        const res = testStubs(pkg, "require");
+        expect(res[0].stub?.main).toBe("../node/sub.js");
+      });
+    });
+
+    describe("types resolution", () => {
+      it("picks types from chosen branch", () => {
+        const pkg = {
+          exports: {
+            "./sub": {
+              import: { types: "./types/sub.d.ts", default: "./esm/sub.js" },
+              require: { types: "./types/sub.d.cts", default: "./cjs/sub.cjs" }
+            }
+          }
+        };
+
+        const importRes = testStubs(pkg, "import");
+        expect(importRes[0].stub?.types).toBe("../types/sub.d.ts");
+
+        const requireRes = testStubs(pkg, "require");
+        expect(requireRes[0].stub?.types).toBe("../types/sub.d.cts");
+      });
+
+      it("falls back to root-level types", () => {
+        const pkg = {
+          types: "./types/root.d.ts",
+          exports: {
+            "./sub": {
+              import: { default: "./esm/sub.js" },
+              require: { default: "./cjs/sub.cjs" }
+            }
+          }
+        };
+        const res = testStubs(pkg, "import");
+        expect(res[0].stub?.types).toBe("../types/root.d.ts");
+      });
+
+      it("finds types from other branch when necessary", () => {
+        const pkg = {
+          exports: {
+            "./sub": {
+              import: { default: "./esm/sub.js" },
+              require: { types: "./types/sub.d.ts", default: "./cjs/sub.cjs" }
+            }
+          }
+        };
+        const res = testStubs(pkg, "import");
+        expect(res[0].stub?.types).toBe("../types/sub.d.ts");
+      });
+
+      it("finds deeply nested types", () => {
+        const pkg = {
+          exports: {
+            "./sub": {
+              import: {
+                default: {
+                  node: {
+                    types: "./types/deep.d.ts",
+                    default: "./esm/sub.js"
+                  }
+                }
+              }
+            }
+          }
+        };
+        const res = testStubs(pkg, "import");
+        expect(res[0].stub?.types).toBe("../types/deep.d.ts");
+      });
+    });
+
+    describe("array handling", () => {
+      it("processes array exports at subpath level", () => {
+        const pkg = {
+          exports: {
+            "./sub": [{ import: "./esm/sub.js" }, { require: "./cjs/sub.cjs" }]
+          }
+        };
+        const res = testStubs(pkg, "import");
+        expect(res[0].stub?.main).toBe("../esm/sub.js");
+      });
+
+      it("extracts types from nested arrays", () => {
+        const pkg = {
+          exports: {
+            "./sub": {
+              import: ["./esm/sub.js", { types: "./types/sub.d.ts" }]
+            }
+          }
+        };
+        const res = testStubs(pkg, "import");
+        expect(res[0].stub?.main).toBe("../esm/sub.js");
+        expect(res[0].stub?.types).toBe("../types/sub.d.ts");
+      });
+    });
+
+    describe("edge cases", () => {
+      it("returns null stub when no main path resolved", () => {
+        const pkg = {
+          exports: {
+            "./sub": { import: { types: "./types/only.d.ts" } } // types only, no main
+          }
+        };
+        const res = testStubs(pkg, "import");
+        expect(res[0].stub).toBeNull();
+      });
+
+      it("processes multiple subpaths", () => {
+        const pkg = {
+          exports: {
+            "./a": { require: "./cjs/a.cjs" },
+            "./b": { import: "./esm/b.js" },
+            "./c": "./dist/c.js"
+          }
+        };
+        const res = testStubs(pkg);
+        expect(res.map((r) => r.stubDir).sort()).toEqual([
+          "/proj/a",
+          "/proj/b",
+          "/proj/c"
+        ]);
+      });
+
+      it("handles Windows paths correctly", () => {
+        const res = computeRedirectStubs({
+          pkg: { exports: { "./sub/nested": "./dist/sub/nested.js" } },
+          rootDir: "C:/proj",
+          prefer: "require"
+        });
+        // On non-Windows platform path.join will yield POSIX style.
+        expect(res[0].stubDir.replace(/\\/g, "/")).toBe("C:/proj/sub/nested");
+        expect(res[0].stub?.main).toBe("../../dist/sub/nested.js");
+      });
+
+      it("always includes private field in stub", () => {
+        const pkg = { exports: { "./sub": "./dist/sub.js" } };
+        const res = testStubs(pkg);
+        expect(res[0].stub?.private).toBe(true);
+      });
+    });
+
+    describe("complex scenarios", () => {
+      it("resolves nested conditions with correct priority", () => {
+        const pkg = {
+          exports: {
+            "./sub": {
+              node: {
+                import: {
+                  types: "./types/node.d.ts",
+                  default: "./esm/node.js"
+                },
+                require: "./cjs/node.cjs"
+              },
+              default: "./dist/sub.js"
+            }
+          }
+        };
+        const res = testStubs(pkg, "import");
+        expect(res[0].stub?.main).toBe("../esm/node.js");
+        expect(res[0].stub?.types).toBe("../types/node.d.ts");
+      });
+
+      it("handles simple string exports at subpath level", () => {
+        const pkg = {
+          exports: {
+            "./utils": "./dist/utils.js",
+            "./helpers": "./dist/helpers.js"
+          }
+        };
+        const res = testStubs(pkg);
+        expect(res).toHaveLength(2);
+        expect(res[0].stub?.main).toBe("../dist/utils.js");
+        expect(res[1].stub?.main).toBe("../dist/helpers.js");
+      });
+    });
+  });
+}
