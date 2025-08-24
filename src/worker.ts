@@ -15,6 +15,7 @@ import type {
 import { copy } from "fs-extra";
 
 import type { WorkerData, WorkerToMainMessage } from "./types.js";
+import { printWarn } from "./log.js";
 
 /**
  * Typescript is CommonJS package, pnp error
@@ -253,7 +254,7 @@ function warnIfSourceMapDepthMismatch() {
   const depthFromJs = computeRelativeDepth(entry, distDir);
   const depthFromTs = computeRelativeDepth(entry, cacheDir);
   if (depthFromJs !== depthFromTs) {
-    printWarnMessage(
+    printWarn(
       `SourceMap relative path depth mismatch: distDir -> entry depth(${depthFromJs}) !== cacheDir -> entry depth(${depthFromTs}).\n` +
       `This may cause broken relative source paths inside *.map files after copying. Consider aligning directory nesting.\n` +
       `  distDir: ${relative(entry, distDir)}\n` +
@@ -282,13 +283,4 @@ function errFormatDiagnostic(diagnostic: Diagnostic) {
     getCurrentDirectory: sys.getCurrentDirectory,
     getNewLine: () => sys.newLine
   });
-}
-
-function printWarnMessage(message: string) {
-  // https://gist.github.com/abritinthebay/d80eb99b2726c83feb0d97eab95206c4
-  const cyan = "\x1b[36m";
-  const yellow = "\x1b[33m"
-  const reset = "\x1b[0m";
-
-  console.warn(`${cyan}[vite-tsc-build] ${yellow}${message}${reset}`);
 }

@@ -1,5 +1,5 @@
 import { Worker } from "node:worker_threads";
-import { readdir, readFile, mkdir, writeFile, unlink } from "node:fs/promises";
+import { readdir, readFile, mkdir, writeFile, unlink, stat } from "node:fs/promises";
 import { dirname, join, resolve, basename, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cwd } from "node:process";
@@ -7,6 +7,7 @@ import { performance } from "node:perf_hooks";
 
 import ts from "typescript";
 import { PromisePool } from "@supercharge/promise-pool";
+import { printInfo, printWarn } from "./log.js";
 
 import type { WorkerData, PluginDtsBuildOptions, WorkerToMainMessage } from "./types.js";
 
@@ -45,7 +46,7 @@ function createWorker(options: WorkerData) {
 function waitBuildInWorker(worker: Worker, startTime: number) {
   return new Promise<WorkerToMainMessage>((resolve, reject) => {
     worker.once("message", (message: WorkerToMainMessage) => {
-      printMessage(`Declaration files built in ${measureTime(startTime)}ms.`);
+      printInfo(`Declaration files built in ${measureTime(startTime)}ms.`);
       worker.removeAllListeners();
       resolve(message);
     });
@@ -69,7 +70,7 @@ function waitCopyInWorker(
     });
 
     worker?.on("exit", async () => {
-      printMessage("Copy files completed.");
+      printInfo("Copy files completed.");
       Promise.resolve(afterBuild()).then(() => resolve());
     });
   });
@@ -79,15 +80,6 @@ function measureTime(startTime: number) {
   const elapsed = performance.now() - startTime;
   const duration = Math.round(elapsed);
   return duration;
-}
-
-function printMessage(message: string) {
-  // https://gist.github.com/abritinthebay/d80eb99b2726c83feb0d97eab95206c4
-  const cyan = "\x1b[36m";
-  const green = "\x1b[32m";
-  const reset = "\x1b[0m";
-
-  console.log(`${cyan}[vite-tsc-build] ${green}${message}${reset}`);
 }
 
 function noop() {}
@@ -112,7 +104,7 @@ export function dts(options: PluginDtsBuildOptions = {}) {
       runState.hasStartRun = true;
 
       const startTime = performance.now();
-      printMessage("Starting TypeScript build...");
+      printInfo("Starting TypeScript build...");
       workerInstance = createWorker(workerOptions);
       const result = await waitBuildInWorker(workerInstance, startTime);
       if (result === "build-end") {
@@ -126,7 +118,7 @@ export function dts(options: PluginDtsBuildOptions = {}) {
       }
       runState.canWriteRun = false;
 
-      printMessage("Starting Copy files...");
+      printInfo("Starting Copy files...");
       workerInstance?.postMessage("copy-start");
       await waitCopyInWorker(workerInstance, afterBuild);
       workerInstance = undefined;
@@ -422,13 +414,17 @@ function computeRedirectStubs({
 
   for (const [key, entry] of Object.entries(exp)) {
     if (!isStubAbleKey(key)) continue;
+    if (typeof entry === "string" && exportKeyDirectMatch(key, entry)) {
+      continue;
+    }
+
 
     const { main, types } = selectTargets(entry, {
       branchOrder,
       rootTypes,
     });
 
-    const subDirRel = key.replace(/^\.\//, "");
+    const subDirRel = normalizeSubpath(key);
     const stubDir = join(rootDir, subDirRel);
     const stubJsonPath = join(stubDir, "package.json");
 
@@ -438,6 +434,12 @@ function computeRedirectStubs({
         stubJsonPath,
         stub: null,
       });
+      continue;
+    }
+
+    // 1) Node10 Resolvable - Skip stub creation when already node10 resolvable (key path matches physical file pattern)
+    if (isAlreadyNode10Resolved(key, main)) {
+      printWarn(`Skip redirect stub for export key '${key}' -> '${main}' (already Node.js 10 resolvable).`);
       continue;
     }
 
@@ -461,12 +463,52 @@ function computeRedirectStubs({
   return results;
 }
 
+const LEADING_DOT_SLASH_RE = /^\.\//;
+const TRAILING_EXT_RE = /\.[^./]+$/;
+function normalizeSubpath(p: string): string {
+  return p.replace(LEADING_DOT_SLASH_RE, "");
+}
+function stripExt(p: string): string {
+  return p.replace(TRAILING_EXT_RE, "");
+}
+
+function exportKeyDirectMatch(key: string, value: string): boolean {
+  return normalizeSubpath(key) === normalizeSubpath(value);
+}
+
+function isAlreadyNode10Resolved(key: string, main: string): boolean {
+  const keyBase = normalizeSubpath(key);
+  const mainBase = normalizeSubpath(main);
+
+  const candidates: string[] = [];
+  ["js", "cjs", "mjs", "json", "node"].forEach(ext => {
+    candidates.push(`${keyBase}.${ext}`);
+  });
+  ["js", "cjs", "mjs", "json", "node"].forEach(ext => {
+    candidates.push(`${keyBase}/index.${ext}`);
+  });
+  candidates.push(keyBase);
+
+  if (candidates.includes(mainBase)) return true;
+  if (stripExt(mainBase) === keyBase) return true;
+  if (stripExt(mainBase) === stripExt(keyBase)) return true;
+
+  return false;
+}
+
 async function writeRedirectStubs(
   tasks: StubTaskResult[],
 ): Promise<void> {
 
   for (const task of tasks) {
     if (!task.stub || !task.stubDir || !task.stubJsonPath) continue;
+
+    // 2) Node10 Resolvable - Warn if a file already exists where a stub directory should be created
+    const dirStat = await stat(task.stubDir).catch(err => err);
+    if (dirStat && !(dirStat instanceof Error) && !dirStat.isDirectory()) {
+      printWarn(`Cannot create redirect stub for '${task.stubDir}' because a file already exists at that path.`);
+      continue;
+    }
 
     await mkdir(task.stubDir, { recursive: true });
 
