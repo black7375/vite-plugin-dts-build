@@ -1,5 +1,6 @@
 import { Worker } from "node:worker_threads";
 import { readdir, readFile, mkdir, writeFile, unlink, stat } from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import { dirname, join, resolve, basename, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cwd } from "node:process";
@@ -379,7 +380,7 @@ async function generatePackageJsonRedirects(prefer: StubPrefer = "require") {
   const pkg = await PackageJson.getData(rootDir);
 
   if (pkg.exports != null) {
-    const tasks = computeRedirectStubs({
+    const tasks = await computeRedirectStubs({
       pkg,
       rootDir,
       prefer,
@@ -390,7 +391,7 @@ async function generatePackageJsonRedirects(prefer: StubPrefer = "require") {
 }
 
 type BranchOrder = "import" | "default" | "node" | "require" | "browser";
-function computeRedirectStubs({
+async function computeRedirectStubs({
   pkg,
   rootDir,
   prefer = "require",
@@ -398,11 +399,10 @@ function computeRedirectStubs({
   pkg: PackageJsonType;
   rootDir: string;
   prefer?: StubPrefer;
-}): StubTaskResult[] {
-  const exp = normalizeExports(pkg.exports);
-  if (exp == null) {
-    return [];
-  }
+}): Promise<StubTaskResult[]> {
+  const expNormalized = normalizeExports(pkg.exports);
+  if (!expNormalized) return [];
+  const exp = await expandWildCardExports(expNormalized, rootDir);
 
   const rootTypes = typeof pkg.types === "string" ? pkg.types : undefined;
   const branchOrder =
@@ -531,16 +531,114 @@ function normalizeExports(exportsField: ExportsField): ExportsMap | null {
   return null;
 }
 
+/**
+ * Expand wildcard export keys (e.g. "./utils/*": "./dist/utils/*.js") into concrete keys.
+ * We approximate Node.js subpath pattern replacement by enumerating files on disk
+ * for each pattern and replacing a single '*' token in both key and target strings.
+ * Only single '*' per string is supported; additional '*' are ignored.
+ */
+async function expandWildCardExports(exp: ExportsMap, rootDir: string): Promise<ExportsMap> {
+  const result: ExportsMap = {};
+  for (const [key, target] of Object.entries(exp)) {
+    if (!key.includes("*")) {
+      result[key] = target;
+      continue;
+    }
+    const tokens = await collectTokensFromExportTarget(target, rootDir);
+    if (tokens.size === 0) {
+      // Skip keeping original wildcard key; stubs only for concrete subpaths
+      continue;
+    }
+    for (const token of tokens) {
+      const concreteKey = key.replace("*", token);
+      const concreteTarget = replaceStarInTarget(target, token);
+      result[concreteKey] = concreteTarget;
+    }
+  }
+  return result;
+}
+
+async function collectTokensFromExportTarget(target: ExportTarget, rootDir: string, acc: Set<string> = new Set()): Promise<Set<string>> {
+  if (typeof target === "string") {
+    if (target.includes("*")) {
+      for (const t of await inferTokensFromPattern(target, rootDir)) {
+        acc.add(t)
+      }
+    }
+    return acc;
+  }
+  if (Array.isArray(target)) {
+    for (const item of target) {
+      await collectTokensFromExportTarget(item as ExportTarget, rootDir, acc);
+    }
+    return acc;
+  }
+  if (isPlainObject(target)) {
+    for (const v of Object.values(target)) {
+      await collectTokensFromExportTarget(v as ExportTarget, rootDir, acc);
+    }
+  }
+  return acc;
+}
+
+function replaceStarInTarget(target: ExportTarget, token: string): ExportTarget {
+  if (typeof target === "string") {
+    return target.includes("*") ? target.replace("*", token) : target;
+  } 
+  if (Array.isArray(target)) {
+    return target.map(v => replaceStarInTarget(v, token) as string);
+  } 
+  if (isPlainObject(target)) {
+    const out: Record<string, ExportTarget> = {};
+    for (const [k, v] of Object.entries(target)) {
+      out[k] = replaceStarInTarget(v as ExportTarget, token);
+    }
+    return out as ExportTarget;
+  }
+  return target;
+}
+
+/** Infer wildcard tokens from a single pattern string (e.g. ./dist/utils/*.js) */
+async function inferTokensFromPattern(pattern: string, rootDir: string): Promise<string[]> {
+  const starIndex = pattern.indexOf("*");
+  if (starIndex === -1) return [];
+  const before = pattern.slice(0, starIndex);
+  const after = pattern.slice(starIndex + 1);
+  const lastSlash = before.lastIndexOf("/");
+  const dirPart = lastSlash === -1 ? "." : before.slice(0, lastSlash);
+  const filePrefix = lastSlash === -1 ? before : before.slice(lastSlash + 1);
+  const fileSuffix = after.includes("/") ? after.slice(0, after.indexOf("/")) : after;
+  const absDir = resolve(rootDir, dirPart.replace(/^\.\//, ""));
+  let entries: Dirent[] = [];
+  try {
+    const dirStat = await stat(absDir).catch(() => null);
+    if (!dirStat || !dirStat.isDirectory()) return [];
+    entries = await readdir(absDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const tokens: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const name = entry.name;
+    if (!name.startsWith(filePrefix)) continue;
+    if (!name.endsWith(fileSuffix)) continue;
+    const core = name.substring(filePrefix.length, name.length - fileSuffix.length);
+    if (core.length === 0) continue;
+    tokens.push(core);
+  }
+  return tokens;
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 function isStubAbleKey(key: string): key is string {
-  // filter subpath keys only
   if (!key.startsWith("./")) return false;
   if (key === "." || key === "./") return false;
   if (key === "./package.json") return false;
-  if (key.includes("*")) return false; // Skip wildcard stubs
+  if (key.includes("*")) return false; // wildcard keys should have been expanded already
   return true;
 }
 
@@ -710,8 +808,8 @@ if (import.meta.vitest) {
   const { describe, it, assert, expect } = import.meta.vitest;
 
   // Helper to simplify creation of test package structures
-  function testStubs(pkg: any, prefer: "import" | "require" = "require") {
-    return computeRedirectStubs({ pkg, rootDir: "/proj", prefer });
+  async function testStubs(pkg: any, prefer: "import" | "require" = "require") {
+    return await computeRedirectStubs({ pkg, rootDir: "/proj", prefer });
   }
 
   describe("computeRedirectStubs", () => {
@@ -720,15 +818,15 @@ if (import.meta.vitest) {
         [{}, []],
         [{ exports: null }, []],
         [{ exports: undefined }, []],
-        [{ exports: "./dist/index.js" }, []], // string exports (root only)
-        [{ exports: ["./dist/index.js", "./dist/index.mjs"] }, []] // array at root
-      ])("returns empty for %o", (pkg: PackageJsonType, expected: StubTaskResult[]) => {
-        expect(testStubs(pkg)).toEqual(expected);
+        [{ exports: "./dist/index.js" }, []],
+        [{ exports: ["./dist/index.js", "./dist/index.mjs"] }, []]
+      ])("returns empty for %o", async (pkg: PackageJsonType, expected: StubTaskResult[]) => {
+        expect(await testStubs(pkg)).toEqual(expected);
       });
     });
 
     describe("filtering export keys", () => {
-      it("skips root, wildcard, and package.json entries", () => {
+      it("skips root, wildcard, and package.json entries", async () => {
         const pkg = {
           exports: {
             ".": "./dist/index.js",
@@ -738,7 +836,7 @@ if (import.meta.vitest) {
             "./sub": "./dist/sub.js"
           }
         };
-        const res = testStubs(pkg);
+        const res = await testStubs(pkg);
         expect(res.map((r) => r.stubDir).sort()).toEqual([
           "/proj/sub",
           "/proj/valid"
@@ -756,27 +854,27 @@ if (import.meta.vitest) {
         }
       };
 
-      it("prefers import when prefer=import", () => {
-        const res = testStubs(dualExports, "import");
+      it("prefers import when prefer=import", async () => {
+        const res = await testStubs(dualExports, "import");
         expect(res[0].stub?.main).toBe("../esm/sub.js");
       });
 
-      it("prefers require when prefer=require", () => {
-        const res = testStubs(dualExports, "require");
+      it("prefers require when prefer=require", async () => {
+        const res = await testStubs(dualExports, "require");
         expect(res[0].stub?.main).toBe("../cjs/sub.cjs");
       });
 
-      it("uses fallback when preferred branch is missing", () => {
+      it("uses fallback when preferred branch is missing", async () => {
         const pkg = {
           exports: {
-            "./sub": { require: "./cjs/sub.cjs" } // no import field
+            "./sub": { require: "./cjs/sub.cjs" }
           }
         };
-        const res = testStubs(pkg, "import");
+        const res = await testStubs(pkg, "import");
         expect(res[0].stub?.main).toBe("../cjs/sub.cjs");
       });
 
-      it("prioritizes node condition correctly", () => {
+      it("prioritizes node condition correctly", async () => {
         const pkg = {
           exports: {
             "./sub": {
@@ -785,13 +883,13 @@ if (import.meta.vitest) {
             }
           }
         };
-        const res = testStubs(pkg, "require");
+        const res = await testStubs(pkg, "require");
         expect(res[0].stub?.main).toBe("../node/sub.js");
       });
     });
 
     describe("types resolution", () => {
-      it("picks types from chosen branch", () => {
+      it("picks types from chosen branch", async () => {
         const pkg = {
           exports: {
             "./sub": {
@@ -801,14 +899,14 @@ if (import.meta.vitest) {
           }
         };
 
-        const importRes = testStubs(pkg, "import");
+        const importRes = await testStubs(pkg, "import");
         expect(importRes[0].stub?.types).toBe("../types/sub.d.ts");
 
-        const requireRes = testStubs(pkg, "require");
+        const requireRes = await testStubs(pkg, "require");
         expect(requireRes[0].stub?.types).toBe("../types/sub.d.cts");
       });
 
-      it("falls back to root-level types", () => {
+      it("falls back to root-level types", async () => {
         const pkg = {
           types: "./types/root.d.ts",
           exports: {
@@ -818,11 +916,11 @@ if (import.meta.vitest) {
             }
           }
         };
-        const res = testStubs(pkg, "import");
+        const res = await testStubs(pkg, "import");
         expect(res[0].stub?.types).toBe("../types/root.d.ts");
       });
 
-      it("finds types from other branch when necessary", () => {
+      it("finds types from other branch when necessary", async () => {
         const pkg = {
           exports: {
             "./sub": {
@@ -831,11 +929,11 @@ if (import.meta.vitest) {
             }
           }
         };
-        const res = testStubs(pkg, "import");
+        const res = await testStubs(pkg, "import");
         expect(res[0].stub?.types).toBe("../types/sub.d.ts");
       });
 
-      it("finds deeply nested types", () => {
+      it("finds deeply nested types", async () => {
         const pkg = {
           exports: {
             "./sub": {
@@ -850,23 +948,23 @@ if (import.meta.vitest) {
             }
           }
         };
-        const res = testStubs(pkg, "import");
+        const res = await testStubs(pkg, "import");
         expect(res[0].stub?.types).toBe("../types/deep.d.ts");
       });
     });
 
     describe("array handling", () => {
-      it("processes array exports at subpath level", () => {
+      it("processes array exports at subpath level", async () => {
         const pkg = {
           exports: {
             "./sub": [{ import: "./esm/sub.js" }, { require: "./cjs/sub.cjs" }]
           }
         };
-        const res = testStubs(pkg, "import");
+        const res = await testStubs(pkg, "import");
         expect(res[0].stub?.main).toBe("../esm/sub.js");
       });
 
-      it("extracts types from nested arrays", () => {
+      it("extracts types from nested arrays", async () => {
         const pkg = {
           exports: {
             "./sub": {
@@ -874,24 +972,24 @@ if (import.meta.vitest) {
             }
           }
         };
-        const res = testStubs(pkg, "import");
+        const res = await testStubs(pkg, "import");
         expect(res[0].stub?.main).toBe("../esm/sub.js");
         expect(res[0].stub?.types).toBe("../types/sub.d.ts");
       });
     });
 
     describe("edge cases", () => {
-      it("returns null stub when no main path resolved", () => {
+      it("returns null stub when no main path resolved", async () => {
         const pkg = {
           exports: {
-            "./sub": { import: { types: "./types/only.d.ts" } } // types only, no main
+            "./sub": { import: { types: "./types/only.d.ts" } }
           }
         };
-        const res = testStubs(pkg, "import");
+        const res = await testStubs(pkg, "import");
         expect(res[0].stub).toBeNull();
       });
 
-      it("processes multiple subpaths", () => {
+      it("processes multiple subpaths", async () => {
         const pkg = {
           exports: {
             "./a": { require: "./cjs/a.cjs" },
@@ -899,7 +997,7 @@ if (import.meta.vitest) {
             "./c": "./dist/c.js"
           }
         };
-        const res = testStubs(pkg);
+        const res = await testStubs(pkg);
         expect(res.map((r) => r.stubDir).sort()).toEqual([
           "/proj/a",
           "/proj/b",
@@ -907,26 +1005,25 @@ if (import.meta.vitest) {
         ]);
       });
 
-      it("handles Windows paths correctly", () => {
-        const res = computeRedirectStubs({
+      it("handles Windows paths correctly", async () => {
+        const res = await computeRedirectStubs({
           pkg: { exports: { "./sub/nested": "./dist/sub/nested.js" } },
           rootDir: "C:/proj",
           prefer: "require"
         });
-        // On non-Windows platform path.join will yield POSIX style.
         expect(res[0].stubDir.replace(/\\/g, "/")).toBe("C:/proj/sub/nested");
         expect(res[0].stub?.main).toBe("../../dist/sub/nested.js");
       });
 
-      it("always includes private field in stub", () => {
+      it("always includes private field in stub", async () => {
         const pkg = { exports: { "./sub": "./dist/sub.js" } };
-        const res = testStubs(pkg);
+        const res = await testStubs(pkg);
         expect(res[0].stub?.private).toBe(true);
       });
     });
 
     describe("complex scenarios", () => {
-      it("resolves nested conditions with correct priority", () => {
+      it("resolves nested conditions with correct priority", async () => {
         const pkg = {
           exports: {
             "./sub": {
@@ -941,22 +1038,124 @@ if (import.meta.vitest) {
             }
           }
         };
-        const res = testStubs(pkg, "import");
+        const res = await testStubs(pkg, "import");
         expect(res[0].stub?.main).toBe("../esm/node.js");
         expect(res[0].stub?.types).toBe("../types/node.d.ts");
       });
 
-      it("handles simple string exports at subpath level", () => {
+      it("handles simple string exports at subpath level", async () => {
         const pkg = {
           exports: {
             "./utils": "./dist/utils.js",
             "./helpers": "./dist/helpers.js"
           }
         };
-        const res = testStubs(pkg);
+        const res = await testStubs(pkg);
         expect(res).toHaveLength(2);
         expect(res[0].stub?.main).toBe("../dist/utils.js");
         expect(res[1].stub?.main).toBe("../dist/helpers.js");
+      });
+    });
+
+    // New tests for wildcard expansion
+    describe("wildcard expansion", async () => {
+      const { rm } = await import("node:fs/promises");
+
+      it("expands single-level wildcard to concrete subpaths", async () => {
+        // create temporary directory structure
+        const tmpRoot = join(process.cwd(), ".tmp-wc-tests");
+        await mkdir(join(tmpRoot, "dist", "utils"), { recursive: true });
+        await writeFile(join(tmpRoot, "dist", "utils", "a.js"), "export const a=1;\n");
+        await writeFile(join(tmpRoot, "dist", "utils", "b.js"), "export const b=2;\n");
+        const pkg = {
+          exports: {
+            "./utils/*": "./dist/utils/*.js"
+          }
+        };
+        try {
+          const res = await computeRedirectStubs({ pkg, rootDir: tmpRoot, prefer: "require" });
+          const dirs = res.map(r => r.stubDir).sort();
+          expect(dirs.some(d => d.endsWith("utils/a"))).toBe(true);
+          expect(dirs.some(d => d.endsWith("utils/b"))).toBe(true);
+          const mains = res.map(r => r.stub?.main || "");
+          expect(mains.every(m => m.endsWith("dist/utils/a.js") || m.endsWith("dist/utils/b.js"))).toBe(true);
+        } finally {
+          await rm(tmpRoot, { recursive: true, force: true }).catch(()=>{});
+        }
+      });
+
+      it("expands wildcard with dual esm/cjs + types + sourcemaps", async () => {
+        const tmpRoot = join(process.cwd(), ".tmp-wc-dual-tests");
+        // Runtime files
+        await mkdir(join(tmpRoot, "esm", "features"), { recursive: true });
+        await mkdir(join(tmpRoot, "cjs", "features"), { recursive: true });
+        await mkdir(join(tmpRoot, "types", "features"), { recursive: true });
+        for (const token of ["alpha", "beta"]) {
+          await writeFile(join(tmpRoot, "esm", "features", `${token}.js`), `export const ${token}=1;\n//# sourceMappingURL=${token}.js.map`);
+          await writeFile(join(tmpRoot, "esm", "features", `${token}.js.map`), JSON.stringify({ file: `${token}.js` }));
+          await writeFile(join(tmpRoot, "cjs", "features", `${token}.cjs`), `module.exports.${token}=1;\n//# sourceMappingURL=${token}.cjs.map`);
+          await writeFile(join(tmpRoot, "cjs", "features", `${token}.cjs.map`), JSON.stringify({ file: `${token}.cjs` }));
+          await writeFile(join(tmpRoot, "types", "features", `${token}.d.ts`), `export declare const ${token}: number;\n//# sourceMappingURL=${token}.d.ts.map`);
+          await writeFile(join(tmpRoot, "types", "features", `${token}.d.ts.map`), JSON.stringify({ file: `${token}.d.ts` }));
+        }
+        const pkg = {
+          exports: {
+            "./features/*": {
+              import: "./esm/features/*.js",
+              require: "./cjs/features/*.cjs",
+              types: "./types/features/*.d.ts"
+            }
+          }
+        };
+        try {
+          const resImport = await computeRedirectStubs({ pkg, rootDir: tmpRoot, prefer: "import" });
+          const resRequire = await computeRedirectStubs({ pkg, rootDir: tmpRoot, prefer: "require" });
+          const keysImport = resImport.map(r => r.stubDir).sort();
+          expect(keysImport.some(k => k.endsWith("features/alpha"))).toBe(true);
+          expect(keysImport.some(k => k.endsWith("features/beta"))).toBe(true);
+          expect(resImport.every(r => r.stub?.main.endsWith("esm/features/alpha.js") || r.stub?.main.endsWith("esm/features/beta.js"))).toBe(true);
+          expect(resRequire.every(r => r.stub?.main.endsWith("cjs/features/alpha.cjs") || r.stub?.main.endsWith("cjs/features/beta.cjs"))).toBe(true);
+          expect(resImport.every(r => r.stub?.types && (r.stub.types.endsWith("types/features/alpha.d.ts") || r.stub.types.endsWith("types/features/beta.d.ts")))).toBe(true);
+          expect(resRequire.every(r => r.stub?.types && (r.stub.types.endsWith("types/features/alpha.d.ts") || r.stub.types.endsWith("types/features/beta.d.ts")))).toBe(true);
+        } finally {
+          await rm(tmpRoot, { recursive: true, force: true }).catch(()=>{});
+        }
+      });
+
+      it("expands wildcard with branch-specific types per mode", async () => {
+        const tmpRoot = join(process.cwd(), ".tmp-wc-branch-types");
+        await mkdir(join(tmpRoot, "esm", "features"), { recursive: true });
+        await mkdir(join(tmpRoot, "cjs", "features"), { recursive: true });
+        for (const token of ["alpha", "beta"]) {
+          await writeFile(join(tmpRoot, "esm", "features", `${token}.js`), `export const ${token}=1;`);
+          await writeFile(join(tmpRoot, "esm", "features", `${token}.d.ts`), `export declare const ${token}: number;`);
+          await writeFile(join(tmpRoot, "cjs", "features", `${token}.cjs`), `module.exports.${token}=1;`);
+          await writeFile(join(tmpRoot, "cjs", "features", `${token}.d.cts`), `export declare const ${token}: number;`);
+        }
+        const pkg = {
+          exports: {
+            "./features/*": {
+              import: {
+                types: "./esm/features/*.d.ts",
+                default: "./esm/features/*.js"
+              },
+              require: {
+                types: "./cjs/features/*.d.cts",
+                default: "./cjs/features/*.cjs"
+              }
+            }
+          }
+        };
+        try {
+          const resImport = await computeRedirectStubs({ pkg, rootDir: tmpRoot, prefer: "import" });
+          const resRequire = await computeRedirectStubs({ pkg, rootDir: tmpRoot, prefer: "require" });
+          expect(resImport.every(r => r.stub?.main.endsWith("esm/features/alpha.js") || r.stub?.main.endsWith("esm/features/beta.js"))).toBe(true);
+          expect(resImport.every(r => r.stub?.types && (r.stub.types.endsWith("esm/features/alpha.d.ts") || r.stub.types.endsWith("esm/features/beta.d.ts")))).toBe(true);
+          expect(resRequire.every(r => r.stub?.main.endsWith("cjs/features/alpha.cjs") || r.stub?.main.endsWith("cjs/features/beta.cjs"))).toBe(true);
+          expect(resRequire.every(r => r.stub?.types && (r.stub.types.endsWith("cjs/features/alpha.d.cts") || r.stub.types.endsWith("cjs/features/beta.d.cts")))).toBe(true);
+        } finally {
+          await rm(tmpRoot, { recursive: true, force: true }).catch(()=>{});
+        }
       });
     });
   });
