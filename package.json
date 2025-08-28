@@ -1,7 +1,7 @@
 {
   "name": "@black7375/vite-plugin-dts-build",
-  "description": "A Vite plugin that runs TypeScript build process in a separate worker thread for better performance and efficient incremental builds",
-  "version": "0.2.0",
+  "description": "Fast .d.ts builds for Vite (worker + incremental) with optional dual ESM/CJS support.",
+  "version": "0.2.1",
   "license": "MIT",
   "repository": {
     "type": "git",
