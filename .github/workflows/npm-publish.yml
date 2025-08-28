@@ -34,9 +34,11 @@ jobs:
         github_token: ${{ secrets[matrix.token] }}
     - uses: actions/setup-node@v4
       with:
+        cache: 'yarn'
         registry-url: ${{ matrix.registry }}
     - run: yarn config set npmPublishRegistry ${{ matrix.registry }}
       if: matrix.branch == 'github-repo'
+    - run: yarn install --immutable
     - run: yarn build
       env:
         CI: true
