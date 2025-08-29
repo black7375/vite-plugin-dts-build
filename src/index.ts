@@ -212,6 +212,7 @@ export function dtsForCjs(options: PluginDtsDualModeBuildOptions = {}) {
 type ModuleKindType = "cjs" | "esm";
 interface PackageJsonType {
   type?: "commonjs" | "module";
+  version?: string;
   exports?: ExportsField;
   [k: string]: unknown;
 }
@@ -367,6 +368,7 @@ interface StubJson {
   private: true;
   main: string;
   types?: string;
+  version?: string;
 }
 
 interface StubTaskResult {
@@ -405,6 +407,7 @@ async function computeRedirectStubs({
   const exp = await expandWildCardExports(expNormalized, rootDir);
 
   const rootTypes = typeof pkg.types === "string" ? pkg.types : undefined;
+  const packageVersion = typeof pkg.version === "string" ? pkg.version : undefined;
   const branchOrder =
     prefer === "import"
       ? ["import", "node", "default", "require", "browser"] satisfies BranchOrder[]
@@ -446,7 +449,7 @@ async function computeRedirectStubs({
     const mainAbs = resolve(rootDir, main);
     const mainRel = toPosixRelative(stubDir, mainAbs);
 
-    const stub: StubJson = { private: true, main: mainRel };
+    const stub: StubJson = { private: true, main: mainRel, version: packageVersion };
 
     if (types) {
       const typesAbs = resolve(rootDir, types);
@@ -1019,6 +1022,21 @@ if (import.meta.vitest) {
         const pkg = { exports: { "./sub": "./dist/sub.js" } };
         const res = await testStubs(pkg);
         expect(res[0].stub?.private).toBe(true);
+      });
+
+      it("includes version from package.json when present", async () => {
+        const pkg = { 
+          version: "1.2.3",
+          exports: { "./sub": "./dist/sub.js" } 
+        };
+        const res = await testStubs(pkg);
+        expect(res[0].stub?.version).toBe("1.2.3");
+      });
+
+      it("omits version when not present in package.json", async () => {
+        const pkg = { exports: { "./sub": "./dist/sub.js" } };
+        const res = await testStubs(pkg);
+        expect(res[0].stub?.version).toBeUndefined();
       });
     });
 
