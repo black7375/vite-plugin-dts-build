@@ -318,18 +318,23 @@ function getErrorMessage(error: unknown): string {
 
 const IMPORT_REGEX = /import ['"](.+)\.js['"];?$/gm;
 const IMPORT_FROM_REGEX = /from ['"](.+)\.js['"];?$/gm;
+const REQUIRE_REGEX = /require\(['"]([^'"\n]+)\.js['"]\)/g;
+const DYNAMIC_IMPORT_CALL_REGEX = /import\(['"]([^'"\n]+)\.js['"]\)/g;
+ 
 // Source map comment patterns (line and block styles)
-const SOURCE_MAP_LINE_REGEX = /(\/\/\# sourceMappingURL=)([^\n]+?)\.d\.ts\.map/;
+const SOURCE_MAP_LINE_REGEX = /(\/\/# sourceMappingURL=)([^\n]+?)\.d\.ts\.map/;
 const SOURCE_MAP_BLOCK_REGEX = /(\/\*# sourceMappingURL=)([^*]+?)\.d\.ts\.map(\s*\*\/)?/;
 async function processDtsFile(fullPath: string, type: ModuleKindType) {
-  const jsExt = type === "esm" ? "mjs" : "cjs";
-  const tsExt = type === "esm" ? "mts" : "cts";
-
+  const jsExt = type === 'esm' ? 'mjs' : 'cjs';
+  const tsExt = type === 'esm' ? 'mts' : 'cts';
+ 
   // Change import paths from .js to .mjs | .cjs
-  const content = await readFile(fullPath, "utf8");
+  const content = await readFile(fullPath, 'utf8');
   const modifiedContent = content
     .replace(IMPORT_REGEX, `import '$1.${jsExt}';`)
-    .replace(IMPORT_FROM_REGEX, `from '$1.${jsExt}';`);
+    .replace(IMPORT_FROM_REGEX, `from '$1.${jsExt}';`)
+    .replace(REQUIRE_REGEX, `require('$1.${jsExt}')`)
+    .replace(DYNAMIC_IMPORT_CALL_REGEX, `import('$1.${jsExt}')`);
 
   // Update sourceMappingURL (//# or /*#) to new .d.mts/.d.cts.map
   const sourceMapUpdated = modifiedContent
