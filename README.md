@@ -255,6 +255,7 @@ export default defineConfig({
 ## For more performance
 
 If you want to further improve performance, consider the following:
+- Use [TypeScript Native Preview](https://www.npmjs.com/package/@typescript/native-preview): Experimental native (Go) port delivering faster incremental / parallel type checking and declaration emit.
 - [`assumeChangesOnlyAffectDirectDependencies`](https://www.typescriptlang.org/tsconfig/#assumeChangesOnlyAffectDirectDependencies): Affected files are not rechecked/rebuilt, and only changed files and directly imported files are rechecked/rebuilt, so it is faster but less accurate.
 - [`isolatedDeclarations`](https://www.typescriptlang.org/tsconfig/#isolatedDeclarations): It is useful when building or checking types in parallel, but requires [explicitly changing each type](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-5.html#solution-explicit-types) at the code level.
 - If you want to make it faster even by changing the code level, refer to [TypeScript Performance Wiki](https://github.com/microsoft/Typescript/wiki/Performance).
