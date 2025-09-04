@@ -1,7 +1,7 @@
 {
   "name": "vite-plugin-dts-build",
   "description": "Fast .d.ts builds for Vite (worker + incremental) with optional dual ESM/CJS support.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "license": "MIT",
   "repository": {
     "type": "git",
